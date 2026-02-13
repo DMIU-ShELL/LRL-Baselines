@@ -13,5 +13,7 @@ If you implement additional algorithms from the literature in the Modulating Mas
 - SI, Synaptic Intelligence (multihead) (description) (cite)
 - CLHNET, Continual Learning with Hypernetworks (description) (cite)
 - CLEAR, Continual Learning with Experience Replay (description) (cite)
+- Mask LC/BLC/RI, Modulating Masks (description) (cite)
+- Mask SC, Mask Selective Combination (description) (cite)
 
 TODO: Create a proper table for the above information
