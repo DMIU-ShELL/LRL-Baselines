@@ -68,16 +68,16 @@ def sac_baseline_continualworld(name, args):
     config.state_normalizer = RunningStatsNormalizer()
     config.reward_normalizer = RewardRunningStatsNormalizer()
     config.discount = 0.99
-    config.rollout_length = 500
+    config.rollout_length = 50
     config.iteration_log_interval = 1
     config.gradient_clip = 5
     config.sac_batch_size = 256
     config.sac_replay_size = int(1e6)
     config.sac_tau = 5e-3
     config.sac_updates_per_step = 1
-    config.sac_init_random_steps = 1000
+    config.sac_init_random_steps = 10_000
     config.sac_min_replay_size = 1000
-    config.sac_alpha = 0.2
+    config.sac_alpha = 0.01
     config.sac_auto_entropy_tuning = True
     config.sac_alpha_tuning = 'target_std'
     config.sac_target_std = 0.089
@@ -89,7 +89,7 @@ def sac_baseline_continualworld(name, args):
     config.histogram_log_interval = args.histogram_log_interval
     config.save_task_checkpoints = args.save_task_checkpoints
 
-    config.eval_interval = 200
+    config.eval_interval = 2000
     config.task_ids = np.arange(num_tasks).tolist()
 
     agent = SACBaselineAgent(config)
@@ -126,7 +126,8 @@ def sac_ll_continualworld(name, args):
     random_seed(config.seed)
     exp_suffix = '-no_task_label' if task_label_input_disabled else ''
     exp_id = '-{0}-mask-{1}{2}'.format(config.seed, args.new_task_mask, exp_suffix)
-    log_name = args.pathheader + '/' + name + '-sac' + '-' + config.cl_preservation + exp_id
+    log_prefix = args.pathheader + '/' if args.pathheader else ''
+    log_name = log_prefix + name + '-sac' + '-' + config.cl_preservation + exp_id
     config.log_dir = get_default_log_dir(log_name)
     config.num_workers = 1
 
@@ -185,29 +186,7 @@ def sac_ll_continualworld(name, args):
     config.eval_interval = 2000
     config.task_ids = np.arange(num_tasks).tolist()
 
-    config.detect_reference_num = 50
-    config.detect_num_samples = 1000
-    config.detect_frequency = 10
-    config.detect_fn = lambda input_dim, action_dim: Detect(config.detect_reference_num,
-        input_dim, action_dim, config.detect_num_samples, one_hot=False, normalized=True)
-    config.detect_topk = args.detect_topk
-    config.COS_TH = args.cos_th
-    config.select_frequency = 20 # was 5, 20 * rollout length of 50 = 1000 env steps == warm up phase.
-    config.select_strategy = args.select_strategy
-    config.select_once_per_task = args.select_once_per_task
-
-    ###
-    # iteration = rollout length * workers = 50 * 1 = 50 env steps
-    # sac warm up = sac_min_replay_size = 1000 env steps
-    # sac_init_random_steps = 10_000 env steps
-    # SAR vector is ~ 12 + 4 + 1 = 17 dimensions (state, action, reward) for continual world
-    # embedding construction = 50
-    # indices selection =
-    # evaluation block = 400 * (50 rollout length) = 10_000 steps (for 1_000_000 max steps 50 evaluations)
-    # updates =
-
-
-    agent = SACDetectLLAgent(config)
+    agent = SACLLAgent(config)
     config.agent_name = agent.__class__.__name__
     tasks = agent.config.cl_tasks_info
     config.cl_num_learn_blocks = 1
@@ -241,14 +220,6 @@ if __name__ == '__main__':
         default=10_240_000, type=int)
     parser.add_argument('--new_task_mask', help='', \
         default='random', type=str)
-    parser.add_argument('--select_strategy', help='selection strategy: similarity or random_topk', \
-        default='similarity', choices=['similarity', 'random_topk'])
-    parser.add_argument('--cos_th', help='cosine similarity threshold for similarity selection', \
-        default=0.5, type=float)
-    parser.add_argument('--detect_topk', help='optional cap on selected prior policies', \
-        default=None, type=int)
-    parser.add_argument('--select_once_per_task', help='only run the first eligible selection per task', \
-        action='store_true')
     parser.add_argument('--disable_task_label_input',
         help='do not concatenate the task label to the policy network input; task labels are still used for task switching/evaluation',
         action='store_true')

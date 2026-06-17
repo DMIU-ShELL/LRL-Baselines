@@ -255,17 +255,7 @@ def sac_ll_continualworld(name, args):
     config.eval_interval = 200
     config.task_ids = np.arange(num_tasks).tolist()
 
-    config.detect_reference_num = 50
-    config.detect_num_samples = 512
-    config.detect_frequency = 1
-    config.detect_fn = lambda input_dim, action_dim: Detect(config.detect_reference_num,
-        input_dim, action_dim, config.detect_num_samples, one_hot=False, normalized=True)
-    config.detect_topk = 3
-    config.select_frequency = 5
-    config.select_strategy = 'similarity'
-    config.select_once_per_task = False
-
-    agent = SACDetectLLAgent(config)
+    agent = SACLLAgent(config)
     config.agent_name = agent.__class__.__name__
     tasks = agent.config.cl_tasks_info
     config.cl_num_learn_blocks = 1
@@ -399,7 +389,7 @@ def sac_ll_continualworld(name, args):
     # targeted exploration for new task (the next task, after seen tasks, in the curriculum)
     # (i.e., agent's behaviour on the new task before any training is performed).
     te_num_tasks_seen = args.te_num_tasks_seen
-    agent = SACDetectLLAgent(config)
+    agent = SACLLAgent(config)
     model_path = '{0}/task_stats/{1}-{2}-model-{3}-run-1-task-{4}.bin'.format(\
         args.path, agent_name, tag, env_name, te_num_tasks_seen)
     agent = load_agent(agent, model_path, te_num_tasks_seen)

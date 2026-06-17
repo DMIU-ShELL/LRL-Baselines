@@ -5,42 +5,6 @@ import time
 import datetime
 import torch
 from .torch_utils import *
-from ..mask_modules import set_selected_task_indices
-
-def _csv_float(value):
-    if value is None:
-        return 'nan'
-    try:
-        if not np.isfinite(value):
-            return 'nan'
-    except TypeError:
-        return 'nan'
-    return f'{float(value):.6f}'
-
-def _selection_perf_eligible(cfg, prior_idx, current_perf, prior_own_perf):
-    prior_perf = prior_own_perf[prior_idx]
-    if not np.isfinite(prior_perf):
-        return False
-
-    min_perf = getattr(cfg, 'selection_prior_min_perf', None)
-    if min_perf is not None and prior_perf < min_perf:
-        return False
-
-    if getattr(cfg, 'selection_require_prior_better_than_current', False):
-        margin = getattr(cfg, 'selection_prior_margin', 0.0)
-        if not np.isfinite(current_perf):
-            current_perf = 0.0
-        if prior_perf <= current_perf + margin:
-            return False
-
-    return True
-
-def _filter_selected_priors(cfg, selected, task_idx, latest_task_perf, prior_own_perf):
-    current_perf = latest_task_perf[task_idx]
-    return [
-        prior_idx for prior_idx in selected
-        if _selection_perf_eligible(cfg, prior_idx, current_perf, prior_own_perf)
-    ]
 
 def _should_log_parameter_histograms(config, iteration):
     if not getattr(config, 'log_parameter_histograms', False):
@@ -155,18 +119,7 @@ def run_iterations_w_oracle(agent, tasks_info):
     rewards = []
     task_start_idx = 0
     num_tasks = len(tasks_info)
-    # track how many times each task selected each prior task (for post-run summaries)
-    selection_counts = [[0 for _ in range(num_tasks)] for _ in range(num_tasks)]
-    prior_own_perf = np.full(num_tasks, np.nan, dtype=np.float32)
-    latest_task_perf = np.full(num_tasks, np.nan, dtype=np.float32)
-    best_task_perf = np.full(num_tasks, -np.inf, dtype=np.float32)
     eval_data_fh = open(config.logger.log_dir + '/eval_metrics.csv', 'a', buffering=1)
-    sims_csv_path = config.logger.log_dir + '/task_similarities.csv'
-    sims_csv_fh = open(sims_csv_path, 'w', buffering=1)
-    sims_csv_fh.write(
-        'learn_block,task_idx,iteration,total_steps,prev_idx,similarity,'
-        'selected,prior_perf,current_perf,eligible\n'
-    )
 
     eval_tracker = False
     eval_data = []
@@ -191,119 +144,15 @@ def run_iterations_w_oracle(agent, tasks_info):
             agent.states = config.state_normalizer(states)
             agent.data_buffer.clear()
             agent.task_train_start(task_info['task_label'])
-            selected_once_for_task = False
-
-            COS_TH = getattr(config, 'COS_TH', 0.5)
-
             while True:
-                # ---- agent iteration ----
+                # train step
                 dict_logs = agent.iteration()
+
                 iteration += 1
+                steps.append(agent.total_steps)
+                rewards.append(np.mean(agent.iteration_rewards))
 
-                total_steps = agent.total_steps
-                steps.append(total_steps)
-                rewards.append(float(np.mean(agent.iteration_rewards)))
-
-                # ---- locals to reduce attribute overhead
-                cfg = agent.config
-                select_strategy = getattr(cfg, "select_strategy", "similarity")
-                detect_freq = getattr(cfg, "detect_frequency", 0) or 0
-                select_freq = getattr(cfg, "select_frequency", 0) or 0
-                detect_topk = getattr(cfg, "detect_topk", None)
-                select_once_per_task = getattr(cfg, "select_once_per_task", False)
-
-                # ---- detect / embedding update ----
-                if hasattr(agent, "detect") and select_strategy == "similarity":
-                    if iteration != 0 and iteration % agent.config.detect_frequency == 0 and agent.data_buffer.size() >= (agent.detect.get_num_samples()):
-                        # extract SAR batch of 128 samples
-                        sar_data = agent.extract_sar(batch_size=config.detect_num_samples)
-
-                        # Update
-                        new_embedding = agent.compute_task_embedding(sar_data, agent.task.action_dim)
-                        agent._update_embedding(task_idx=task_idx, new_emb=new_embedding, ema=0.5)
-
-                # ---- selection step ----
-                should_select = (
-                    iteration
-                    and select_freq
-                    and (iteration % select_freq == 0)
-                    and task_idx > 0
-                    and (not select_once_per_task or not selected_once_for_task)
-                )
-                if should_select:
-                    selection_attempted = False
-                    if select_strategy == "random_topk":
-                        candidate_indices = list(range(task_idx))
-                        k = min(getattr(cfg, "detect_topk", 0) or 0, task_idx)
-                        selected_raw = np.random.choice(candidate_indices, size=k, replace=False).tolist() if k > 0 else []
-                        selected = _filter_selected_priors(
-                            cfg, selected_raw, task_idx, latest_task_perf, prior_own_perf
-                        )
-                        selection_attempted = True
-
-                        set_selected_task_indices(agent.network, selected)
-                        for idx in selected:
-                            selection_counts[task_idx][idx] += 1
-
-                        selected_set = set(selected)
-                        # buffer writes
-                        lines = [
-                            (
-                                f"{learn_block_idx},{task_idx},{iteration},{total_steps},"
-                                f"{prev_idx},nan,{int(prev_idx in selected_set)},"
-                                f"{_csv_float(prior_own_perf[prev_idx])},"
-                                f"{_csv_float(latest_task_perf[task_idx])},"
-                                f"{int(_selection_perf_eligible(cfg, prev_idx, latest_task_perf[task_idx], prior_own_perf))}\n"
-                            )
-                            for prev_idx in range(task_idx)
-                        ]
-                        sims_csv_fh.writelines(lines)
-                        cfg.logger.info(f"Random priors: {selected_raw}\nFiltered selected: {selected}")
-
-                    elif select_strategy == "similarity":
-                        # select prior indices
-                        selected_raw, sims = agent.select_similar(task_idx=task_idx, threshold=COS_TH, topk=detect_topk)
-                        selection_attempted = sims is not None
-                        selected = _filter_selected_priors(
-                            cfg, selected_raw, task_idx, latest_task_perf, prior_own_perf
-                        )
-
-                        if selection_attempted:
-                            set_selected_task_indices(agent.network, selected)
-                        for idx in selected:
-                            selection_counts[task_idx][idx] += 1
-
-                        selected_set = set(selected)
-
-                        # log sims for *existing* embeddings (fast + consistent with cache)
-                        # sims is aligned with agent._emb_indices
-                        lines = []
-                        sims_list = []
-                        if sims is not None:
-                            sims_cpu = sims.detach().float().cpu().tolist()
-                            for sim_val, prev_idx in zip(sims_cpu, agent._emb_indices):
-                                sims_list.append((sim_val, prev_idx))
-                                eligible = _selection_perf_eligible(
-                                    cfg, prev_idx, latest_task_perf[task_idx], prior_own_perf
-                                )
-                                lines.append(
-                                    (
-                                        f"{learn_block_idx},{task_idx},{iteration},{total_steps},"
-                                        f"{prev_idx},{sim_val:.6f},{int(prev_idx in selected_set)},"
-                                        f"{_csv_float(prior_own_perf[prev_idx])},"
-                                        f"{_csv_float(latest_task_perf[task_idx])},"
-                                        f"{int(eligible)}\n"
-                                    )
-                                )
-                            sims_csv_fh.writelines(lines)
-                            sims_list.sort(key=lambda x: x[0], reverse=True)
-
-                        cfg.logger.info(f"Prior sims: {sims_list}\nRaw selected: {selected_raw}\nFiltered selected: {selected}")
-
-                    if select_once_per_task and selection_attempted:
-                        selected_once_for_task = True
-                                
-                # ---- logging iteration stats ----
+                # logging
                 if iteration % config.iteration_log_interval == 0:
                     itr_log_fn(config.logger, agent, iteration, dict_logs)
 
@@ -321,7 +170,7 @@ def run_iterations_w_oracle(agent, tasks_info):
                                 tag = 'layer_output/' + tag
                                 config.logger.histo_summary(tag, value.data.cpu().numpy())
 
-                # ---- evaluation block ----
+                # evaluation block
                 if (agent.config.eval_interval is not None and \
                     iteration % agent.config.eval_interval == 0):
                     config.logger.info('*****agent / evaluation block')
@@ -337,10 +186,7 @@ def run_iterations_w_oracle(agent, tasks_info):
                         # rewards in other environments
                         perf, eps = agent.evaluate_cl(num_iterations=config.evaluation_episodes)
                         agent.task_eval_end()
-                        mean_perf = float(np.mean(perf))
-                        eval_data[-1][eval_task_idx] = mean_perf
-                        latest_task_perf[eval_task_idx] = mean_perf
-                        best_task_perf[eval_task_idx] = max(best_task_perf[eval_task_idx], mean_perf)
+                        eval_data[-1][eval_task_idx] = np.mean(perf)
                     _record = np.concatenate([eval_data[-1], np.array(time.time()).reshape(1,)])
                     np.savetxt(eval_data_fh, _record.reshape(1, -1), delimiter=',', fmt='%.4f')
                     del _record
@@ -383,16 +229,6 @@ def run_iterations_w_oracle(agent, tasks_info):
                 agent.evaluation_states = eval_states
                 perf, episodes = agent.evaluate_cl(num_iterations=config.evaluation_episodes)
                 eval_results[j] += perf
-                mean_perf = float(np.mean(perf))
-                latest_task_perf[j] = mean_perf
-                best_task_perf[j] = max(best_task_perf[j], mean_perf)
-                if j == task_idx:
-                    prior_own_perf[task_idx] = mean_perf
-                    config.logger.info(
-                        'stored prior own performance for task {0}: {1:.4f}'.format(
-                            task_idx, mean_perf
-                        )
-                    )
 
                 agent.task_eval_end()
 
@@ -416,17 +252,6 @@ def run_iterations_w_oracle(agent, tasks_info):
         config.logger.info('********** end of learning block {0}\n'.format(learn_block_idx))
     # end for learning block
     eval_data_fh.close()
-    sims_csv_fh.close()
-    if hasattr(agent, 'detect'):
-        config.logger.info('***** selection counts (current task -> prior task: count)')
-        print('selection counts (current task -> prior task: count)')
-        for curr_idx in range(num_tasks):
-            if curr_idx == 0:
-                summary = 'none'
-            else:
-                summary = ', '.join([f'{prior}:{selection_counts[curr_idx][prior]}' for prior in range(curr_idx)])
-            config.logger.info(f'task {curr_idx}: {summary}')
-
     if len(eval_data) > 0:
         to_save = np.stack(eval_data, axis=0)
         with open(config.logger.log_dir + '/eval_metrics.npy', 'wb') as f:
