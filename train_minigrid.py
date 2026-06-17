@@ -25,6 +25,7 @@ ppo, baseline (no lifelong learning), task boundary (oracle) given
 '''
 def ppo_baseline_minigrid(name, args):
     env_config_path = args.env_config_path
+    task_label_input_disabled = args.disable_task_label_input
 
     config = Config()
     config.env_name = name
@@ -33,7 +34,8 @@ def ppo_baseline_minigrid(name, args):
     config.cl_preservation = 'baseline'
     config.seed = args.seed
     random_seed(config.seed)
-    exp_id = '-{0}'.format(config.seed)
+    exp_suffix = '-no_task_label' if task_label_input_disabled else ''
+    exp_id = '-{0}{1}'.format(config.seed, exp_suffix)
     log_name = name + '-ppo' + '-' + config.cl_preservation + exp_id
     config.log_dir = get_default_log_dir(log_name)
     config.num_workers = 4
@@ -43,6 +45,7 @@ def ppo_baseline_minigrid(name, args):
         env_config_ = json.load(f)
     num_tasks = len(env_config_['tasks'])
     del env_config_
+    config.use_task_label_input = not task_label_input_disabled
 
     task_fn = lambda log_dir: MiniGridFlatObs(name, env_config_path, log_dir, config.seed, False)
     config.task_fn = lambda: ParallelizedTask(task_fn, config.num_workers, log_dir=config.log_dir)
@@ -51,7 +54,11 @@ def ppo_baseline_minigrid(name, args):
     config.optimizer_fn = lambda params, lr: torch.optim.RMSprop(params, lr=lr)
     config.network_fn = lambda state_dim, action_dim, label_dim: CategoricalActorCriticNet_CL(
         state_dim, action_dim, label_dim, 
-        phi_body=FCBody_CL(state_dim, task_label_dim=label_dim, hidden_units=(200, 200, 200)),
+        phi_body=FCBody_CL(
+            state_dim,
+            task_label_dim=None if task_label_input_disabled else label_dim,
+            hidden_units=(200, 200, 200),
+        ),
         actor_body=DummyBody_CL(200),
         critic_body=DummyBody_CL(200))
     config.policy_fn = SamplePolicy
@@ -67,6 +74,9 @@ def ppo_baseline_minigrid(name, args):
     config.num_mini_batches = 64
     config.ppo_ratio_clip = 0.1
     config.iteration_log_interval = 1
+    config.log_parameter_histograms = args.log_parameter_histograms
+    config.histogram_log_interval = args.histogram_log_interval
+    config.save_task_checkpoints = args.save_task_checkpoints
     config.gradient_clip = 5
     config.max_steps = args.max_steps
     config.evaluation_episodes = 10
@@ -100,6 +110,7 @@ ppo, supermask lifelong learning, task boundary (oracle) given
 '''
 def ppo_ll_minigrid(name, args):
     env_config_path = args.env_config_path
+    task_label_input_disabled = args.disable_task_label_input
 
     config = Config()
     config.env_name = name
@@ -108,8 +119,9 @@ def ppo_ll_minigrid(name, args):
     config.cl_preservation = 'supermask'
     config.seed = args.seed
     random_seed(config.seed)
-    exp_id = '-{0}-mask-{1}'.format(config.seed, args.new_task_mask)
-    log_name = name + '-ppo' + '-' + config.cl_preservation + exp_id
+    exp_suffix = '-no_task_label' if task_label_input_disabled else ''
+    exp_id = '-{0}-mask-{1}{2}'.format(config.seed, args.new_task_mask, exp_suffix)
+    log_name = args.pathheader + '/' + name + '-ppo' + '-' + config.cl_preservation + exp_id
     config.log_dir = get_default_log_dir(log_name)
     config.num_workers = 4
     # get num_tasks from env_config
@@ -117,6 +129,7 @@ def ppo_ll_minigrid(name, args):
         env_config_ = json.load(f)
     num_tasks = len(env_config_['tasks'])
     del env_config_
+    config.use_task_label_input = not task_label_input_disabled
 
     task_fn = lambda log_dir: MiniGridFlatObs(name, env_config_path, log_dir, config.seed, False)
     config.task_fn = lambda: ParallelizedTask(task_fn, config.num_workers, log_dir=config.log_dir)
@@ -125,7 +138,13 @@ def ppo_ll_minigrid(name, args):
     config.optimizer_fn = lambda params, lr: torch.optim.RMSprop(params, lr=lr)
     config.network_fn = lambda state_dim, action_dim, label_dim: CategoricalActorCriticNet_SS(
         state_dim, action_dim, label_dim,
-        phi_body=FCBody_SS(state_dim, task_label_dim=label_dim, hidden_units=(200, 200, 200), num_tasks=num_tasks, new_task_mask=args.new_task_mask),
+        phi_body=FCBody_SS(
+            state_dim,
+            task_label_dim=None if task_label_input_disabled else label_dim,
+            hidden_units=(200, 200, 200),
+            num_tasks=num_tasks,
+            new_task_mask=args.new_task_mask,
+        ),
         actor_body=DummyBody_CL(200),
         critic_body=DummyBody_CL(200),
         num_tasks=num_tasks,
@@ -137,12 +156,15 @@ def ppo_ll_minigrid(name, args):
     config.discount = 0.99
     config.use_gae = True
     config.gae_tau = 0.99
-    config.entropy_weight = 0.1 #0.75
+    config.entropy_weight = 0.01 #0.75
     config.rollout_length = 128
     config.optimization_epochs = 8
     config.num_mini_batches = 64
     config.ppo_ratio_clip = 0.1
     config.iteration_log_interval = 1
+    config.log_parameter_histograms = args.log_parameter_histograms
+    config.histogram_log_interval = args.histogram_log_interval
+    config.save_task_checkpoints = args.save_task_checkpoints
     config.gradient_clip = 5
     config.max_steps = args.max_steps
     config.evaluation_episodes = 10
@@ -186,7 +208,21 @@ if __name__ == '__main__':
         default=51200*5, type=int)
     parser.add_argument('--new_task_mask', help='', \
         default='random', type=str)
+    parser.add_argument('--disable_task_label_input',
+        help='do not concatenate the task label to the policy network input; task labels are still used for task switching/evaluation',
+        action='store_true')
     parser.add_argument('--seed', help='seed for experiment', default=54741, type=int)
+    parser.add_argument('--pathheader', '--p', '-p', help='experiment header to log path for launcher.py', type=str, default='')
+    parser.add_argument('--log_parameter_histograms',
+        help='enable TensorBoard parameter histograms; disabled by default because they create very large event files',
+        action='store_true')
+    parser.add_argument('--histogram_log_interval',
+        help='iteration interval for parameter histograms when --log_parameter_histograms is enabled; defaults to iteration_log_interval',
+        type=int,
+        default=1)
+    parser.add_argument('--save_task_checkpoints',
+        help='save full per-task model checkpoints under task_stats; disabled by default because these files are very large',
+        action='store_true')
     args = parser.parse_args()
 
     if args.env_name == 'minigrid':

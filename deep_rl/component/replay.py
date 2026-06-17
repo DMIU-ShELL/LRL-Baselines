@@ -5,6 +5,7 @@
 #######################################################################
 
 import numpy as np
+import torch
 
 class Replay:
     def __init__(self, memory_size, batch_size):
@@ -31,7 +32,11 @@ class Replay:
 
         sampled_indices = [np.random.randint(0, len(self.data)) for _ in range(batch_size)]
         sampled_data = [self.data[ind] for ind in sampled_indices]
-        batch_data = list(map(lambda x: np.asarray(x), zip(*sampled_data)))
+        def _to_numpy(field):
+            if len(field) > 0 and isinstance(field[0], torch.Tensor):
+                return torch.stack([f.detach().cpu() for f in field]).numpy()
+            return np.asarray(field)
+        batch_data = [_to_numpy(field) for field in zip(*sampled_data)]
         return batch_data
 
     def size(self):

@@ -153,6 +153,86 @@ class FCBody_SS(nn.Module): # fcbody for supermask superposition continual learn
                 x = self.gate(layer(x))
         return x, ret_act
 
+
+class LayerNormFCBody_CL(nn.Module):
+    def __init__(self, state_dim, task_label_dim=None, hidden_units=(256, 256, 256, 256),
+                 negative_slope=0.2):
+        super(LayerNormFCBody_CL, self).__init__()
+        if task_label_dim is None:
+            dims = (state_dim,) + hidden_units
+        else:
+            dims = (state_dim + task_label_dim,) + hidden_units
+        self.layers = nn.ModuleList(
+            [layer_init(nn.Linear(dim_in, dim_out)) for dim_in, dim_out in zip(dims[:-1], dims[1:])]
+        )
+        self.first_layer_norm = nn.LayerNorm(dims[1]) if len(dims) > 1 else None
+        self.feature_dim = dims[-1]
+        self.task_label_dim = task_label_dim
+        self.negative_slope = negative_slope
+
+    def _activate(self, x, idx):
+        if idx == 0:
+            if self.first_layer_norm is not None:
+                x = self.first_layer_norm(x)
+            return torch.tanh(x)
+        return F.leaky_relu(x, negative_slope=self.negative_slope)
+
+    def forward(self, x, task_label=None, return_layer_output=False, prefix=''):
+        if self.task_label_dim is not None:
+            assert task_label is not None, '`task_label` should be set'
+            x = torch.cat([x, task_label], dim=1)
+
+        ret_act = []
+        for i, layer in enumerate(self.layers):
+            x = self._activate(layer(x), i)
+            if return_layer_output:
+                ret_act.append((f'{prefix}.layers.{i}', x))
+        return x, ret_act
+
+
+class LayerNormFCBody_SS(nn.Module):
+    def __init__(self, state_dim, task_label_dim=None, hidden_units=(256, 256, 256, 256),
+                 negative_slope=0.2, discrete_mask=True, num_tasks=3,
+                 new_task_mask=NEW_MASK_RANDOM):
+        super(LayerNormFCBody_SS, self).__init__()
+        if task_label_dim is None:
+            dims = (state_dim,) + hidden_units
+        else:
+            dims = (state_dim + task_label_dim,) + hidden_units
+        self.layers = nn.ModuleList([
+            MultitaskMaskLinear(
+                dim_in,
+                dim_out,
+                discrete=discrete_mask,
+                num_tasks=num_tasks,
+                new_mask_type=new_task_mask,
+            )
+            for dim_in, dim_out in zip(dims[:-1], dims[1:])
+        ])
+        self.first_layer_norm = nn.LayerNorm(dims[1]) if len(dims) > 1 else None
+        self.feature_dim = dims[-1]
+        self.task_label_dim = task_label_dim
+        self.negative_slope = negative_slope
+
+    def _activate(self, x, idx):
+        if idx == 0:
+            if self.first_layer_norm is not None:
+                x = self.first_layer_norm(x)
+            return torch.tanh(x)
+        return F.leaky_relu(x, negative_slope=self.negative_slope)
+
+    def forward(self, x, task_label=None, return_layer_output=False, prefix=''):
+        if self.task_label_dim is not None:
+            assert task_label is not None, '`task_label` should be set'
+            x = torch.cat([x, task_label], dim=1)
+
+        ret_act = []
+        for i, layer in enumerate(self.layers):
+            x = self._activate(layer(x), i)
+            if return_layer_output:
+                ret_act.append((f'{prefix}.layers.{i}', x))
+        return x, ret_act
+
 class TwoLayerFCBodyWithAction(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_units=(64, 64), gate=F.relu):
         super(TwoLayerFCBodyWithAction, self).__init__()

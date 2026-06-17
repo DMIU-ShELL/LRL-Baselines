@@ -10,6 +10,15 @@ import os
 import datetime
 import torch
 from .torch_utils import *
+
+def _should_log_parameter_histograms(config, iteration):
+    if not getattr(config, 'log_parameter_histograms', False):
+        return False
+    interval = getattr(config, 'histogram_log_interval', None)
+    if interval is None:
+        interval = getattr(config, 'iteration_log_interval', 1)
+    interval = int(interval)
+    return interval > 0 and iteration % interval == 0
 #from io import BytesIO
 #import scipy.misc
 #import torchvision
@@ -181,9 +190,10 @@ def run_iterations(agent): # run iterations single task setting
                 pickle.dump({'rewards': rewards, 'steps': steps}, f)
             agent.save(config.log_dir + '/%s-%s-model-%s.bin' % (agent_name, config.tag, \
                 agent.task.name))
-            for tag, value in agent.network.named_parameters():
-                tag = tag.replace('.', '/')
-                config.logger.histo_summary(tag, value.data.cpu().numpy())
+            if _should_log_parameter_histograms(config, iteration):
+                for tag, value in agent.network.named_parameters():
+                    tag = tag.replace('.', '/')
+                    config.logger.histo_summary(tag, value.data.cpu().numpy())
         iteration += 1
         if config.max_steps and agent.total_steps >= config.max_steps:
             with open(config.log_dir + '/%s-%s-online-stats-%s.bin' % \
@@ -259,13 +269,14 @@ def run_iterations_cl(agent, tasks_info): #run iterations continual learning (mu
                         pickle.dump({'rewards': rewards, 'steps': steps}, f)
                     agent.save(config.log_dir + '/%s-%s-model-%s.bin' % (agent_name, config.tag, \
                         agent.task.name))
-                    for tag, value in agent.network.named_parameters():
-                        tag = tag.replace('.', '/')
-                        config.logger.histo_summary(tag, value.data.cpu().numpy())
-                    if hasattr(agent, 'layers_output'):
-                        for tag, value in agent.layers_output:
-                            tag = 'layer_output/' + tag
+                    if _should_log_parameter_histograms(config, iteration):
+                        for tag, value in agent.network.named_parameters():
+                            tag = tag.replace('.', '/')
                             config.logger.histo_summary(tag, value.data.cpu().numpy())
+                        if hasattr(agent, 'layers_output'):
+                            for tag, value in agent.layers_output:
+                                tag = 'layer_output/' + tag
+                                config.logger.histo_summary(tag, value.data.cpu().numpy())
 
                 iteration += 1
                 task_steps_limit = config.max_steps * (num_tasks * learn_block_idx + task_idx + 1)
@@ -274,8 +285,9 @@ def run_iterations_cl(agent, tasks_info): #run iterations continual learning (mu
                         (agent_name, config.tag, agent.task.name, learn_block_idx+1, task_idx+1), 'wb') as f:
                         pickle.dump({'rewards': rewards[task_start_idx : ], \
                         'steps': steps[task_start_idx : ]}, f)
-                    agent.save(log_path_tstats +'/%s-%s-model-%s-run-%d-task-%d.bin' % (agent_name, \
-                        config.tag, agent.task.name, learn_block_idx+1, task_idx+1))
+                    if getattr(config, 'save_task_checkpoints', False):
+                        agent.save(log_path_tstats +'/%s-%s-model-%s-run-%d-task-%d.bin' % (agent_name, \
+                            config.tag, agent.task.name, learn_block_idx+1, task_idx+1))
                     agent.save(config.log_dir + '/%s-%s-model-%s.bin' % (agent_name, config.tag, \
                         agent.task.name))
                     task_start_idx = len(rewards)

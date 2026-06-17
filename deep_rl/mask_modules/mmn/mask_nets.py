@@ -73,6 +73,7 @@ class MultitaskMaskLinear(nn.Linear):
         if self.new_mask_type == NEW_MASK_LINEAR_COMB:
             self.betas = nn.Parameter(torch.zeros(num_tasks, num_tasks).type(torch.float32))
             self._forward_mask = self._forward_mask_linear_comb
+            self.selected_task_indices = None
         else:
             self.betas = None
             self._forward_mask = self._forward_mask_normal
@@ -121,19 +122,32 @@ class MultitaskMaskLinear(nn.Linear):
             # this is the first task to train. no previous task mask to linearly combine.
             return self._subnet_class.apply(_subnet)
 
-        # otherwise, a new task and it is not the first task. combine task mask with
-        # masks from previous tasks.
-        # note: should not update scores/masks from previous tasks. only update their coeffs/betas
-        _subnets = [self.scores[idx].detach() for idx in range(self.task)]
-        assert len(_subnets) > 0, 'an error occured'
-        _betas = self.betas[self.task, 0:self.task+1]
-        _betas = torch.softmax(_betas, dim=-1)
-        _subnets.append(_subnet)
-        assert len(_betas) == len(_subnets), 'an error ocurred'
-        _subnets = [_b * _s for _b, _s in  zip(_betas, _subnets)]
-        # element wise sum of various masks (weighted sum)
-        _subnet_linear_comb = torch.stack(_subnets, dim=0).sum(dim=0)
-        return self._subnet_class.apply(_subnet_linear_comb)
+        if self.selected_task_indices is not None:
+            selected = [idx for idx in self.selected_task_indices if idx < self.task]
+            _subnets = [self.scores[idx].detach() for idx in selected]
+            _subnets.append(_subnet)
+
+            beta_indices = selected + [self.task]
+            _betas = self.betas[self.task, beta_indices]
+            _betas = torch.softmax(_betas, dim=-1)
+
+            _subnets = [_b * _s for _b, _s in zip(_betas, _subnets)]
+            _subnet_linear_comb = torch.stack(_subnets, dim=0).sum(dim=0)
+            return self._subnet_class.apply(_subnet_linear_comb)
+        else:
+            # otherwise, a new task and it is not the first task. combine task mask with
+            # masks from previous tasks.
+            # note: should not update scores/masks from previous tasks. only update their coeffs/betas
+            _subnets = [self.scores[idx].detach() for idx in range(self.task)]
+            assert len(_subnets) > 0, 'an error occured'
+            _betas = self.betas[self.task, 0:self.task+1]
+            _betas = torch.softmax(_betas, dim=-1)
+            _subnets.append(_subnet)
+            assert len(_betas) == len(_subnets), 'an error ocurred'
+            _subnets = [_b * _s for _b, _s in  zip(_betas, _subnets)]
+            # element wise sum of various masks (weighted sum)
+            _subnet_linear_comb = torch.stack(_subnets, dim=0).sum(dim=0)
+            return self._subnet_class.apply(_subnet_linear_comb)
 
     @torch.no_grad()
     def consolidate_mask(self):
@@ -145,18 +159,33 @@ class MultitaskMaskLinear(nn.Linear):
             # re-visiting a task that has been previously learnt
             # (no need to consolidate)
             return
-        _subnet = self.scores[self.task]
-        _subnets = [self.scores[idx].detach() for idx in range(self.task)]
-        assert len(_subnets) > 0, 'an error occured'
-        _betas = self.betas[self.task, 0:self.task+1]
-        _betas = torch.softmax(_betas, dim=-1)
-        _subnets.append(_subnet)
-        assert len(_betas) == len(_subnets), 'an error ocurred'
-        _subnets = [_b * _s for _b, _s in  zip(_betas, _subnets)]
-        # element wise sum of various masks (weighted sum)
-        _subnet_linear_comb = torch.stack(_subnets, dim=0).sum(dim=0)
-        self.scores[self.task].data = _subnet_linear_comb.data
-        return
+        if self.selected_task_indices is not None:
+            _subnet = self.scores[self.task]
+            selected = [idx for idx in self.selected_task_indices if idx < self.task]
+            _subnets = [self.scores[idx].detach() for idx in selected]
+            _subnets.append(_subnet)
+
+            beta_indices = selected + [self.task]
+            _betas = self.betas[self.task, beta_indices]
+            _betas = torch.softmax(_betas, dim=-1)
+
+            _subnets = [_b * _s for _b, _s in zip(_betas, _subnets)]
+            _subnet_linear_comb = torch.stack(_subnets, dim=0).sum(dim=0)
+            self.scores[self.task].data = _subnet_linear_comb.data
+            return
+        else:
+            _subnet = self.scores[self.task]
+            _subnets = [self.scores[idx].detach() for idx in range(self.task)]
+            assert len(_subnets) > 0, 'an error occured'
+            _betas = self.betas[self.task, 0:self.task+1]
+            _betas = torch.softmax(_betas, dim=-1)
+            _subnets.append(_subnet)
+            assert len(_betas) == len(_subnets), 'an error ocurred'
+            _subnets = [_b * _s for _b, _s in  zip(_betas, _subnets)]
+            # element wise sum of various masks (weighted sum)
+            _subnet_linear_comb = torch.stack(_subnets, dim=0).sum(dim=0)
+            self.scores[self.task].data = _subnet_linear_comb.data
+            return
         
     def __repr__(self):
         return f"MultitaskMaskLinear({self.in_dims}, {self.out_dims})"
@@ -179,13 +208,32 @@ class MultitaskMaskLinear(nn.Linear):
         self.cache_masks() 
         return
 
-    @torch.no_grad()
+    # Mask LC
+    '''@torch.no_grad()
     def set_task(self, task, new_task=False):
         self.task = task
         if self.new_mask_type == NEW_MASK_LINEAR_COMB and new_task:
             if task > 0:
                 k = task + 1
                 self.betas.data[task, 0:k] = 1. / k
+                #print(self.betas)'''
+
+    # Mask BLC
+    @torch.no_grad()
+    def set_task(self, task, new_task=False):
+        self.task = task
+        if self.new_mask_type == NEW_MASK_LINEAR_COMB and new_task:
+            if task > 0:
+                k = task + 1
+                # set the coeff for the new task to a fixed starting value of 0.25.
+                # this is set to 0.25 for now. The remaining prob are shared equally
+                # by previous task masks.
+                threshold_ = 0.5
+                remain_prob = 1. - threshold_
+                self.betas.data[task, k-1] = threshold_
+                self.betas.data[task, 0:k-1] = remain_prob / (k-1)
+
+                self.betas.data[task, 0:k] = torch.log(self.betas.data[task, 0:k])
                 #print(self.betas)
 
 # Subnetwork forward from hidden networks
@@ -421,6 +469,11 @@ def consolidate_mask(model):
     for n, m in model.named_modules():
         if isinstance(m, MultitaskMaskLinear) or isinstance(m, MultitaskMaskLinearSparse):
             m.consolidate_mask()
+
+def set_selected_task_indices(model, indices):
+    for n, m in model.named_modules():
+        if isinstance(m, MultitaskMaskLinear) or isinstance(m, MultitaskMaskLinearSparse):
+            m.selected_task_indices = indices
 
 # Multitask Model, a simple fully connected model in this case
 class SampleMaskModel(nn.Module):
