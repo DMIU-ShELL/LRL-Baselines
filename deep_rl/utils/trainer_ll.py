@@ -15,6 +15,15 @@ def _should_log_parameter_histograms(config, iteration):
     interval = int(interval)
     return interval > 0 and iteration % interval == 0
 
+def _should_save_iteration_snapshots(config, iteration):
+    if not getattr(config, 'save_iteration_snapshots', False):
+        return False
+    interval = getattr(config, 'iteration_snapshot_interval', None)
+    if interval is None:
+        interval = getattr(config, 'iteration_log_interval', 1)
+    interval = int(interval)
+    return interval > 0 and iteration % interval == 0
+
 def _itr_log(logger, agent, iteration, dict_logs):
     logger.info('iteration %d, total steps %d, mean/max/min reward %f/%f/%f'%(
         iteration, agent.total_steps,
@@ -156,11 +165,12 @@ def run_iterations_w_oracle(agent, tasks_info):
                 if iteration % config.iteration_log_interval == 0:
                     itr_log_fn(config.logger, agent, iteration, dict_logs)
 
-                    with open(config.log_dir + '/%s-%s-online-stats-%s.bin' % \
-                        (agent_name, config.tag, agent.task.name), 'wb') as f:
-                        pickle.dump({'rewards': rewards, 'steps': steps}, f)
-                    agent.save(config.log_dir + '/%s-%s-model-%s.bin' % (agent_name, config.tag, \
-                        agent.task.name))
+                    if _should_save_iteration_snapshots(config, iteration):
+                        with open(config.log_dir + '/%s-%s-online-stats-%s.bin' % \
+                            (agent_name, config.tag, agent.task.name), 'wb') as f:
+                            pickle.dump({'rewards': rewards, 'steps': steps}, f)
+                        agent.save(config.log_dir + '/%s-%s-model-%s.bin' % (agent_name, config.tag, \
+                            agent.task.name))
                     if _should_log_parameter_histograms(config, iteration):
                         for tag, value in agent.network.named_parameters():
                             tag = tag.replace('.', '/')
