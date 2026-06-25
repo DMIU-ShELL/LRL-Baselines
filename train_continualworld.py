@@ -13,10 +13,43 @@ https://arxiv.org/abs/2006.14769
 import json
 import copy
 import shutil
-import matplotlib
-matplotlib.use("Pdf")
-from deep_rl import *
 import os
+import sys
+from pathlib import Path
+
+
+def _prefer_conda_runtime_libs():
+    conda_lib = Path(sys.prefix) / 'lib'
+    libstdcxx = conda_lib / 'libstdc++.so.6'
+    if not libstdcxx.exists():
+        return
+
+    mujoco_path = Path.home() / '.mujoco' / 'mujoco210'
+    os.environ.setdefault('MUJOCO_PY_MUJOCO_PATH', str(mujoco_path))
+
+    required_paths = [conda_lib]
+    if mujoco_path.exists():
+        required_paths.append(mujoco_path / 'bin')
+    nvidia_lib = Path('/usr/lib/nvidia')
+    if nvidia_lib.exists():
+        required_paths.append(nvidia_lib)
+
+    required_paths = [str(path) for path in required_paths]
+    ld_paths = os.environ.get('LD_LIBRARY_PATH', '').split(os.pathsep)
+    if os.environ.get('_LRL_CONDA_LIB_REEXEC') == '1' or ld_paths[:len(required_paths)] == required_paths:
+        return
+
+    os.environ['_LRL_CONDA_LIB_REEXEC'] = '1'
+    os.environ['LD_LIBRARY_PATH'] = os.pathsep.join(
+        required_paths + [path for path in ld_paths if path and path not in required_paths]
+    )
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+_prefer_conda_runtime_libs()
+# import matplotlib
+# matplotlib.use("Pdf")
+from deep_rl import *
 import argparse
 
 ##### ContinualWorld environment

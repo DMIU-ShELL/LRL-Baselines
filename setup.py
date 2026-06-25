@@ -1,12 +1,14 @@
 from setuptools import setup, find_packages
 import sys
 
-if sys.version.startswith('2.7'):
+if sys.version_info[:2] == (2, 7):
     pathlib = 'pathlib2>=1.0.1'
-elif sys.version.startswith('3.5') or sys.version.startswith('3.6'):
+elif sys.version_info[:2] in ((3, 5), (3, 6)):
     pathlib = 'pathlib>=1.0.1'
+elif sys.version_info >= (3, 7):
+    pathlib = ''
 else:
-    raise Exception('Only Python 2.7, 3.5 and 3.6 are supported')
+    raise Exception('Only Python 2.7 or Python 3.5+ are supported')
 
 setup(name='deep_rl',
       packages=[package for package in find_packages()
@@ -17,13 +19,12 @@ setup(name='deep_rl',
           'gym>=0.10.5',
           'atari-py>=0.1.1',
           'opencv-python>=3.4.0.12',
-          'tensorboardX==1.1',
+          'tensorboardX>=1.1',
           'scikit-image>=0.13.1',
           'tqdm>=4.23.0',
           'pandas>=0.22.0',
           'seaborn>=0.8.1',
-          pathlib
-      ],
+      ] + ([pathlib] if pathlib else []),
       description="Highly modularized implementation of popular deep RL algorithms",
       author="Shangtong Zhang",
       url='https://github.com/ShangtongZhang/DeepRL',

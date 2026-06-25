@@ -12,6 +12,7 @@ from ..utils import *
 import uuid
 import json
 import itertools
+import pickle
 
 # fix to enable running the code on MacOS using python>=3.8
 # spawn multiprocessing start method fails to run the lambda
@@ -618,6 +619,34 @@ class CW12ObsWrapper(gym.ObservationWrapper):
     def observation(self, obs):
         return obs[self.IDX].astype(np.float32)
 
+class LegacyTimeLimit(gym.Wrapper):
+    def __init__(self, env, max_episode_steps):
+        super().__init__(env)
+        self._max_episode_steps = max_episode_steps
+        self._elapsed_steps = 0
+
+    def step(self, action):
+        result = self.env.step(action)
+        if len(result) == 5:
+            state, reward, terminated, truncated, info = result
+            done = terminated or truncated
+        else:
+            state, reward, done, info = result
+
+        self._elapsed_steps += 1
+        if self._elapsed_steps >= self._max_episode_steps and not done:
+            done = True
+            info = dict(info)
+            info['TimeLimit.truncated'] = True
+        return state, reward, done, info
+
+    def reset(self, **kwargs):
+        self._elapsed_steps = 0
+        result = self.env.reset(**kwargs)
+        if isinstance(result, tuple) and len(result) == 2:
+            return result[0]
+        return result
+
 class ContinualWorld(BaseTask):
 
     # subtask: a configuration of object and goal polication in an env/task.
@@ -626,16 +655,47 @@ class ContinualWorld(BaseTask):
         'random_init_all', # randomly generate a subtask per reset in env/task.
         'random_init_fixed20', # randomly selected out of 20 predefined subtask per reset in env/task
     ]
+
+    def _make_v2_subtasks(self, task_name, env_cls, randomization):
+        from metaworld import Task
+
+        num_subtasks = 20 if randomization == 'random_init_fixed20' else 1
+        env = env_cls()
+        env._freeze_rand_vec = False
+        env._set_task_called = True
+        env._set_task_inner()
+
+        subtasks = []
+        for _ in range(num_subtasks):
+            env.reset()
+            data = {
+                'rand_vec': env._last_rand_vec,
+                'env_cls': env_cls,
+                'partially_observable': False,
+            }
+            subtasks.append(Task(env_name=task_name, data=pickle.dumps(data)))
+        env.close()
+        return subtasks
+
     def _env_instantiator(self, task_name, randomization):
-        from gym.wrappers import TimeLimit
         from continualworld.utils.wrappers import RandomizationWrapper, SuccessCounter
         from continualworld.envs import get_subtasks, MT50, META_WORLD_TIME_HORIZON
+        from metaworld.envs.mujoco.env_dict import ALL_V2_ENVIRONMENTS
         # adapted from get_single_env in continualworld codebase.
-        env = MT50.train_classes[task_name]()
-        env = RandomizationWrapper(env, get_subtasks(task_name), randomization)
-        env = CW12ObsWrapper(env)
+        if task_name in MT50.train_classes:
+            env = MT50.train_classes[task_name]()
+            subtasks = get_subtasks(task_name)
+        elif task_name in ALL_V2_ENVIRONMENTS:
+            env_cls = ALL_V2_ENVIRONMENTS[task_name]
+            env = env_cls()
+            subtasks = self._make_v2_subtasks(task_name, env_cls, randomization)
+        else:
+            raise KeyError('Unknown ContinualWorld task: {0}'.format(task_name))
+        env = RandomizationWrapper(env, subtasks, randomization)
+        if env.observation_space.shape[0] > CW12ObsWrapper.IDX.max():
+            env = CW12ObsWrapper(env)
         # Currently TimeLimit is needed since SuccessCounter looks at dones.
-        env = TimeLimit(env, META_WORLD_TIME_HORIZON)
+        env = LegacyTimeLimit(env, META_WORLD_TIME_HORIZON)
         #env = TimeLimit(env, 500)
         #env = SuccessCounter(env)
         env.name = task_name
