@@ -166,7 +166,7 @@ class BaseContinualLearnerAgent(BaseAgent):
         total_success = 1. if total_success > 0. else 0.
         return total_success, epi_info
 
-    def evaluate_cl(self, num_iterations=100):
+    def evaluate_cl(self, num_iterations=100, deterministic=True):
         fn_episode = None
         if self.evaluation_env.name == self.config.ENV_METAWORLD or \
             self.evaluation_env.name == self.config.ENV_CONTINUALWORLD:
@@ -179,7 +179,7 @@ class BaseContinualLearnerAgent(BaseAgent):
         episodes = []
         with torch.no_grad():
             for ep in range(num_iterations):
-                total_episode_reward, episode_info = fn_episode()
+                total_episode_reward, episode_info = fn_episode(deterministic=deterministic)
                 rewards.append(total_episode_reward)
                 episodes.append(episode_info)
         return rewards, episodes

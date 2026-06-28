@@ -24,7 +24,15 @@ def _should_save_iteration_snapshots(config, iteration):
     interval = int(interval)
     return interval > 0 and iteration % interval == 0
 
+def _is_success_rate_env(agent):
+    return agent.task.name == agent.config.ENV_METAWORLD or \
+        agent.task.name == agent.config.ENV_CONTINUALWORLD
+
+def _eval_metric_name(agent):
+    return 'success_rate' if _is_success_rate_env(agent) else 'reward'
+
 def _itr_log(logger, agent, iteration, dict_logs):
+    step = agent.total_steps
     logger.info('iteration %d, total steps %d, mean/max/min reward %f/%f/%f'%(
         iteration, agent.total_steps,
         np.mean(agent.iteration_rewards),
@@ -39,6 +47,10 @@ def _itr_log(logger, agent, iteration, dict_logs):
     logger.scalar_summary('iteration_reward/std', np.std(agent.iteration_rewards))
     logger.scalar_summary('iteration_reward/max', np.max(agent.iteration_rewards))
     logger.scalar_summary('iteration_reward/min', np.min(agent.iteration_rewards))
+    logger.scalar_summary('train/rollout_reward_sum',
+        agent.rollout_reward_sum, step=step)
+    logger.scalar_summary('train/rollout_reward_mean_per_step',
+        agent.rollout_reward_mean_per_step, step=step)
 
     if hasattr(agent, 'layers_output'):
         for tag, value in agent.layers_output:
@@ -60,6 +72,7 @@ def _itr_log(logger, agent, iteration, dict_logs):
 
 # metaworld/continualworld
 def _itr_log_mw(logger, agent, iteration, dict_logs):
+    step = agent.total_steps
     logger.info('iteration %d, total steps %d, mean/max/min reward %f/%f/%f, ' \
         'mean/max/min success rate %f/%f/%f'%(
         iteration, agent.total_steps,
@@ -70,23 +83,39 @@ def _itr_log_mw(logger, agent, iteration, dict_logs):
         np.max(agent.iteration_success_rate),
         np.min(agent.iteration_success_rate)
     ))
-    logger.scalar_summary('last_episode_reward/avg', np.mean(agent.last_episode_rewards))
-    logger.scalar_summary('last_episode_reward/std', np.std(agent.last_episode_rewards))
-    logger.scalar_summary('last_episode_reward/max', np.max(agent.last_episode_rewards))
-    logger.scalar_summary('last_episode_reward/min', np.min(agent.last_episode_rewards))
-    logger.scalar_summary('iteration_reward/avg', np.mean(agent.iteration_rewards))
-    logger.scalar_summary('iteration_reward/std', np.std(agent.iteration_rewards))
-    logger.scalar_summary('iteration_reward/max', np.max(agent.iteration_rewards))
-    logger.scalar_summary('iteration_reward/min', np.min(agent.iteration_rewards))
+    logger.scalar_summary('last_episode_reward/avg', np.mean(agent.last_episode_rewards), step=step)
+    logger.scalar_summary('last_episode_reward/std', np.std(agent.last_episode_rewards), step=step)
+    logger.scalar_summary('last_episode_reward/max', np.max(agent.last_episode_rewards), step=step)
+    logger.scalar_summary('last_episode_reward/min', np.min(agent.last_episode_rewards), step=step)
+    logger.scalar_summary('iteration_reward/avg', np.mean(agent.iteration_rewards), step=step)
+    logger.scalar_summary('iteration_reward/std', np.std(agent.iteration_rewards), step=step)
+    logger.scalar_summary('iteration_reward/max', np.max(agent.iteration_rewards), step=step)
+    logger.scalar_summary('iteration_reward/min', np.min(agent.iteration_rewards), step=step)
+    logger.scalar_summary('train/rollout_reward_sum',
+        agent.rollout_reward_sum, step=step)
+    logger.scalar_summary('train/rollout_reward_mean_per_step',
+        agent.rollout_reward_mean_per_step, step=step)
 
-    logger.scalar_summary('last_episode_success_rate/avg', np.mean(agent.last_episode_success_rate))
-    logger.scalar_summary('last_episode_success_rate/std', np.std(agent.last_episode_success_rate))
-    logger.scalar_summary('last_episode_success_rate/max', np.max(agent.last_episode_success_rate))
-    logger.scalar_summary('last_episode_success_rate/min', np.min(agent.last_episode_success_rate))
-    logger.scalar_summary('iteration_success_rate/avg', np.mean(agent.iteration_success_rate))
-    logger.scalar_summary('iteration_success_rate/std', np.std(agent.iteration_success_rate))
-    logger.scalar_summary('iteration_success_rate/max', np.max(agent.iteration_success_rate))
-    logger.scalar_summary('iteration_success_rate/min', np.min(agent.iteration_success_rate))
+    logger.scalar_summary('train/success_rate_last_episode_avg',
+        np.mean(agent.last_episode_success_rate), step=step)
+    logger.scalar_summary('train/success_rate_iteration_avg',
+        np.mean(agent.iteration_success_rate), step=step)
+    logger.scalar_summary('last_episode_success_rate/avg',
+        np.mean(agent.last_episode_success_rate), step=step)
+    logger.scalar_summary('last_episode_success_rate/std',
+        np.std(agent.last_episode_success_rate), step=step)
+    logger.scalar_summary('last_episode_success_rate/max',
+        np.max(agent.last_episode_success_rate), step=step)
+    logger.scalar_summary('last_episode_success_rate/min',
+        np.min(agent.last_episode_success_rate), step=step)
+    logger.scalar_summary('iteration_success_rate/avg',
+        np.mean(agent.iteration_success_rate), step=step)
+    logger.scalar_summary('iteration_success_rate/std',
+        np.std(agent.iteration_success_rate), step=step)
+    logger.scalar_summary('iteration_success_rate/max',
+        np.max(agent.iteration_success_rate), step=step)
+    logger.scalar_summary('iteration_success_rate/min',
+        np.min(agent.iteration_success_rate), step=step)
 
     if hasattr(agent, 'layers_output'):
         for tag, value in agent.layers_output:
@@ -128,7 +157,18 @@ def run_iterations_w_oracle(agent, tasks_info):
     rewards = []
     task_start_idx = 0
     num_tasks = len(tasks_info)
-    eval_data_fh = open(config.logger.log_dir + '/eval_metrics.csv', 'a', buffering=1)
+    metric_name = _eval_metric_name(agent)
+    eval_metrics_path = config.logger.log_dir + '/eval_metrics.csv'
+    eval_data_fh = open(eval_metrics_path, 'a', buffering=1)
+    if eval_data_fh.tell() == 0:
+        task_headers = [
+            'task_{0}_{1}'.format(task_idx, metric_name)
+            for task_idx in range(len(tasks_info))
+        ]
+        eval_data_fh.write(','.join(
+            ['iteration', 'total_steps'] + task_headers +
+            ['mean_{0}'.format(metric_name), 'wall_time']
+        ) + '\n')
 
     eval_tracker = False
     eval_data = []
@@ -194,20 +234,37 @@ def run_iterations_w_oracle(agent, tasks_info):
                         agent.evaluation_states = eval_states
                         # performance (perf) can be success rate in (meta-)continualworld or
                         # rewards in other environments
-                        perf, eps = agent.evaluate_cl(num_iterations=config.evaluation_episodes)
+                        perf, eps = agent.evaluate_cl(
+                            num_iterations=config.evaluation_episodes,
+                            deterministic=True)
                         agent.task_eval_end()
                         eval_data[-1][eval_task_idx] = np.mean(perf)
-                    _record = np.concatenate([eval_data[-1], np.array(time.time()).reshape(1,)])
-                    np.savetxt(eval_data_fh, _record.reshape(1, -1), delimiter=',', fmt='%.4f')
-                    del _record
+                        config.logger.scalar_summary(
+                            'eval/task_{0}/{1}'.format(eval_task_idx, metric_name),
+                            eval_data[-1][eval_task_idx],
+                            step=agent.total_steps)
+                    mean_eval_metric = np.mean(eval_data[-1])
+                    eval_data_fh.write(','.join(
+                        [str(iteration), str(agent.total_steps)] +
+                        ['{0:.4f}'.format(value) for value in eval_data[-1]] +
+                        ['{0:.4f}'.format(mean_eval_metric),
+                         '{0:.4f}'.format(time.time())]
+                    ) + '\n')
                     icr = eval_data[-1].sum()
                     metric_icr.append(icr)
                     tpot = np.sum(metric_icr)
                     config.logger.info('*****cl evaluation:')
+                    config.logger.info('cl eval mean {0}: {1}'.format(
+                        metric_name, mean_eval_metric))
                     config.logger.info('cl eval ICR: {0}'.format(icr))
                     config.logger.info('cl eval TPOT: {0}'.format(tpot))
-                    config.logger.scalar_summary('cl_eval/icr', icr)
-                    config.logger.scalar_summary('cl_eval/tpot', np.sum(metric_icr))
+                    config.logger.scalar_summary(
+                        'eval/{0}_mean'.format(metric_name),
+                        mean_eval_metric,
+                        step=agent.total_steps)
+                    config.logger.scalar_summary('cl_eval/icr', icr, step=agent.total_steps)
+                    config.logger.scalar_summary(
+                        'cl_eval/tpot', np.sum(metric_icr), step=agent.total_steps)
 
 
                 # check whether task training has been completed
@@ -237,7 +294,9 @@ def run_iterations_w_oracle(agent, tasks_info):
 
                 eval_states = agent.evaluation_env.reset_task(tasks_info[j])
                 agent.evaluation_states = eval_states
-                perf, episodes = agent.evaluate_cl(num_iterations=config.evaluation_episodes)
+                perf, episodes = agent.evaluate_cl(
+                    num_iterations=config.evaluation_episodes,
+                    deterministic=True)
                 eval_results[j] += perf
 
                 agent.task_eval_end()
@@ -253,11 +312,14 @@ def run_iterations_w_oracle(agent, tasks_info):
         with open(log_path_eval + '/eval_full_stats.bin', 'wb') as f: pickle.dump(eval_results, f)
 
         f = open(log_path_eval + '/eval_stats.csv', 'w')
-        f.write('task_id,avg_reward\n')
+        f.write('task_id,avg_{0}\n'.format(metric_name))
         for k, v in eval_results.items():
             print('{0}: {1:.4f}'.format(k, np.mean(v)))
             f.write('{0},{1:.4f}\n'.format(k, np.mean(v)))
-            config.logger.scalar_summary('zeval/task_{0}/avg_reward'.format(k), np.mean(v))
+            config.logger.scalar_summary(
+                'zeval/task_{0}/avg_{1}'.format(k, metric_name),
+                np.mean(v),
+                step=agent.total_steps)
         f.close()
         config.logger.info('********** end of learning block {0}\n'.format(learn_block_idx))
     # end for learning block

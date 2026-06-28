@@ -78,6 +78,9 @@ class SACContinualLearnerAgent(BaseContinualLearnerAgent):
         self.last_episode_rewards = np.zeros(config.num_workers)
         self.running_episodes_rewards = [[] for _ in range(config.num_workers)]
         self.iteration_rewards = np.zeros(config.num_workers)
+        self.rollout_rewards = np.zeros(config.num_workers)
+        self.rollout_reward_sum = 0.
+        self.rollout_reward_mean_per_step = 0.
 
         self.states = self.task.reset()
         self.states = config.state_normalizer(self.states)
@@ -190,13 +193,18 @@ class SACContinualLearnerAgent(BaseContinualLearnerAgent):
     def _finalize_iteration_rewards(self):
         for i in range(self.config.num_workers):
             self.iteration_rewards[i] = self._avg_episodic_perf(self.running_episodes_rewards[i])
+        self.rollout_reward_sum = np.sum(self.rollout_rewards)
+        self.rollout_reward_mean_per_step = self.rollout_reward_sum / (
+            self.config.rollout_length * self.config.num_workers)
 
     def _rollout_normal(self, states, batch_task_label):
         self.running_episodes_rewards = [[] for _ in range(self.config.num_workers)]
+        self.rollout_rewards = np.zeros(self.config.num_workers)
 
         for _ in range(self.config.rollout_length):
             actions, _ = self._sample_actions(states, batch_task_label)
             next_states, rewards, terminals, _ = self.task.step(actions)
+            self.rollout_rewards += rewards
             self._update_episode_metrics(rewards, terminals)
             rewards_norm = self.config.reward_normalizer(rewards)
             next_states = self.config.state_normalizer(next_states)
@@ -211,10 +219,12 @@ class SACContinualLearnerAgent(BaseContinualLearnerAgent):
     def _rollout_metaworld(self, states, batch_task_label):
         self.running_episodes_rewards = [[] for _ in range(self.config.num_workers)]
         self.running_episodes_success_rate = [[] for _ in range(self.config.num_workers)]
+        self.rollout_rewards = np.zeros(self.config.num_workers)
 
         for _ in range(self.config.rollout_length):
             actions, _ = self._sample_actions(states, batch_task_label)
             next_states, rewards, terminals, infos = self.task.step(actions)
+            self.rollout_rewards += rewards
             success_rates = [info['success'] for info in infos]
             self.episode_success_rate += success_rates
             self._update_episode_metrics(rewards, terminals)

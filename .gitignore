@@ -112,3 +112,6 @@ plots
 
 # numpy files
 *.npy
+
+
+nohup*

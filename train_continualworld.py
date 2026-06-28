@@ -115,7 +115,7 @@ def sac_baseline_continualworld(name, args):
     config.sac_alpha_tuning = 'target_std'
     config.sac_target_std = 0.089
     config.max_steps = args.max_steps
-    config.evaluation_episodes = 10
+    config.evaluation_episodes = args.evaluation_episodes
     config.logger = get_logger(log_dir=config.log_dir, file_name='train-log')
     config.cl_requires_task_label = True
     config.log_parameter_histograms = args.log_parameter_histograms
@@ -124,7 +124,7 @@ def sac_baseline_continualworld(name, args):
     config.save_iteration_snapshots = args.save_iteration_snapshots
     config.iteration_snapshot_interval = args.iteration_snapshot_interval
 
-    config.eval_interval = 2000
+    config.eval_interval = args.eval_interval
     config.task_ids = np.arange(num_tasks).tolist()
 
     agent = SACBaselineAgent(config)
@@ -211,7 +211,7 @@ def sac_ll_continualworld(name, args):
     config.sac_alpha_tuning = 'target_std'  # auto_entropy, target_std
     config.sac_target_std = 0.089
     config.max_steps = args.max_steps
-    config.evaluation_episodes = 10
+    config.evaluation_episodes = args.evaluation_episodes
     config.logger = get_logger(log_dir=config.log_dir, file_name='train-log')
     config.cl_requires_task_label = True
     config.log_parameter_histograms = args.log_parameter_histograms
@@ -220,7 +220,7 @@ def sac_ll_continualworld(name, args):
     config.save_iteration_snapshots = args.save_iteration_snapshots
     config.iteration_snapshot_interval = args.iteration_snapshot_interval
 
-    config.eval_interval = 2000
+    config.eval_interval = args.eval_interval
     config.task_ids = np.arange(num_tasks).tolist()
 
     agent = SACLLAgent(config)
@@ -254,7 +254,7 @@ if __name__ == '__main__':
     parser.add_argument('--env_config_path', help='path to environment config', \
         default='./env_configs/continualworld_10.json')
     parser.add_argument('--max_steps', help='maximum number of training steps per task.', \
-        default=10_240_000, type=int)
+        default=240_000, type=int)
     parser.add_argument('--new_task_mask', help='', \
         default='random', type=str)
     parser.add_argument('--disable_task_label_input',
@@ -277,6 +277,14 @@ if __name__ == '__main__':
         help='iteration interval for --save_iteration_snapshots; defaults to iteration_log_interval',
         type=int,
         default=None)
+    parser.add_argument('--eval_interval',
+        help='training iteration interval for deterministic success-rate evaluation',
+        type=int,
+        default=2000)
+    parser.add_argument('--evaluation_episodes',
+        help='number of deterministic episodes per task when estimating eval success rate',
+        type=int,
+        default=10)
     parser.add_argument('--seed', help='seed for the experiment', default=8379, type=int)
     parser.add_argument('--pathheader', '--p', '-p', help='experiment header to log path for launcher.py', type=str, default='')
     args = parser.parse_args()
